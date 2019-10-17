@@ -38,7 +38,7 @@ if (dialect !== 'sqlite') {
       });
     });
 
-    if (dialect === 'mysql' || dialect === 'mariadb') {
+    if (dialect === 'mysql' || dialect === 'mariadb' || dialect === 'memsql') {
       it('handles existing timestamps', function() {
         const NormalUser = this.sequelize.define('user', {}),
           TimezonedUser = this.sequelizeWithTimezone.define('user', {});
