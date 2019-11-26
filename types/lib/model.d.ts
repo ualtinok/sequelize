@@ -1,26 +1,15 @@
-import {
-  Association,
-  BelongsTo,
-  BelongsToMany,
-  BelongsToManyOptions,
-  BelongsToOptions,
-  HasMany,
-  HasManyOptions,
-  HasOne,
-  HasOneOptions,
-} from './associations/index';
+import { IndexHints } from '..';
+import { Association, BelongsTo, BelongsToMany, BelongsToManyOptions, BelongsToOptions, HasMany, HasManyOptions, HasOne, HasOneOptions } from './associations/index';
 import { DataType } from './data-types';
 import { Deferrable } from './deferrable';
 import { HookReturn, Hooks, ModelHooks } from './hooks';
 import { ValidationOptions } from './instance-validator';
-import { ModelManager } from './model-manager';
-import Op = require('./operators');
 import { Promise } from './promise';
 import { QueryOptions, IndexesOptions } from './query-interface';
 import { Config, Options, Sequelize, SyncOptions } from './sequelize';
-import { Transaction } from './transaction';
+import { Transaction, LOCK } from './transaction';
 import { Col, Fn, Literal, Where } from './utils';
-import { IndexHints } from '..';
+import Op = require('./operators');
 
 export interface Logging {
   /**
@@ -341,6 +330,7 @@ export type WhereValue =
   | string // literal value
   | number // literal value
   | boolean // literal value
+  | Date // literal value
   | Buffer // literal value
   | null
   | WhereOperators
@@ -372,12 +362,18 @@ export interface WhereAttributeHash {
 /**
  * Through options for Include Options
  */
-export interface IncludeThroughOptions extends Filterable, Projectable {}
+export interface IncludeThroughOptions extends Filterable, Projectable {
+  /**
+   * The alias of the relation, in case the model you want to eagerly load is aliassed. For `hasOne` /
+   * `belongsTo`, this should be the singular name, and for `hasMany`, it should be the plural
+   */
+  as?: string;
+}
 
 /**
  * Options for eager-loading associated models, also allowing for all associations to be loaded at once
  */
-export type Includeable = typeof Model | Association | IncludeOptions | { all: true } | string;
+export type Includeable = typeof Model | Association | IncludeOptions | { all: true, nested?: true } | string;
 
 /**
  * Complex include options
@@ -419,6 +415,11 @@ export interface IncludeOptions extends Filterable, Projectable, Paranoid {
    * matching children. True if `include.where` is set, false otherwise.
    */
   required?: boolean;
+
+  /**
+   * If true, converts to a right join if dialect support it. Ignored if `include.required` is true.
+   */
+  right?: boolean;
 
   /**
    * Limit include. Only available when setting `separate` to true.
@@ -507,13 +508,13 @@ type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>
  */
 export interface FindOptions extends QueryOptions, Filterable, Projectable, Paranoid, IndexHintable {
   /**
-   * A list of associations to eagerly load using a left join. Supported is either
-   * `{ include: [ Model1, Model2, ...]}`, `{ include: [{ model: Model1, as: 'Alias' }]}` or
+   * A list of associations to eagerly load using a left join (a single association is also supported). Supported is either
+   * `{ include: Model1 }`, `{ include: [ Model1, Model2, ...]}`, `{ include: [{ model: Model1, as: 'Alias' }]}` or
    * `{ include: [{ all: true }]}`.
    * If your association are set up with an `as` (eg. `X.hasMany(Y, { as: 'Z }`, you need to specify Z in
    * the as attribute when eager loading Y).
    */
-  include?: Includeable[];
+  include?: Includeable | Includeable[];
 
   /**
    * Specifies an ordering. If a string is provided, it will be escaped. Using an array, you can provide
@@ -543,8 +544,10 @@ export interface FindOptions extends QueryOptions, Filterable, Projectable, Para
    * Postgres also supports transaction.LOCK.KEY_SHARE, transaction.LOCK.NO_KEY_UPDATE and specific model
    * locks with joins. See [transaction.LOCK for an example](transaction#lock)
    */
-  lock?: Transaction.LOCK | { level: Transaction.LOCK; of: typeof Model };
-
+  lock?:
+    | LOCK
+    | { level: LOCK; of: typeof Model }
+    | boolean;
   /**
    * Skip locked rows. Only supported in Postgres.
    */
@@ -580,7 +583,7 @@ export interface CountOptions extends Logging, Transactionable, Filterable, Proj
   /**
    * Include options. See `find` for details
    */
-  include?: Includeable[];
+  include?: Includeable | Includeable[];
 
   /**
    * Apply COUNT(DISTINCT(col))
@@ -629,11 +632,11 @@ export interface BuildOptions {
   isNewRecord?: boolean;
 
   /**
-   * an array of include options - Used to build prefetched/included model instances. See `set`
+   * An array of include options. A single option is also supported - Used to build prefetched/included model instances. See `set`
    *
    * TODO: See set
    */
-  include?: Includeable[];
+  include?: Includeable | Includeable[];
 }
 
 export interface Silent {
@@ -749,7 +752,7 @@ export interface BulkCreateOptions extends Logging, Transactionable {
   /**
    * Include options. See `find` for details
    */
-  include?: Includeable[];
+  include?: Includeable | Includeable[];
 
   /**
    * Return all columns or only the specified columns for the affected rows (only for postgres)
@@ -832,7 +835,7 @@ export interface RestoreOptions extends Logging, Transactionable, Filterable {
 /**
  * Options used for Model.update
  */
-export interface UpdateOptions extends Logging, Transactionable {
+export interface UpdateOptions extends Logging, Transactionable, Paranoid {
   /**
    * Options to describe the scope of the search.
    */
@@ -1257,7 +1260,7 @@ export interface ModelAttributeColumnReferencesOptions {
 /**
  * Column options for the model schema attributes
  */
-export interface ModelAttributeColumnOptions extends ColumnOptions {
+export interface ModelAttributeColumnOptions<M extends Model = Model> extends ColumnOptions {
   /**
    * A string or a data type
    */
@@ -1338,23 +1341,23 @@ export interface ModelAttributeColumnOptions extends ColumnOptions {
    * Provide a custom getter for this column. Use `this.getDataValue(String)` to manipulate the underlying
    * values.
    */
-  get?(): unknown;
+  get?(this: M): unknown;
 
   /**
    * Provide a custom setter for this column. Use `this.setDataValue(String, Value)` to manipulate the
    * underlying values.
    */
-  set?(val: unknown): void;
+  set?(this: M, val: unknown): void;
 }
 
 /**
  * Interface for Attributes provided for a column
  */
-export interface ModelAttributes {
+export interface ModelAttributes<M extends Model = Model> {
   /**
    * The description of a database column
    */
-  [name: string]: DataType | ModelAttributeColumnOptions;
+  [name: string]: DataType | ModelAttributeColumnOptions<M>;
 }
 
 /**
@@ -1604,7 +1607,7 @@ export abstract class Model<T = any, T2 = any> extends Hooks {
    *  string or a type-description object, with the properties described below:
    * @param options These options are merged with the default define options provided to the Sequelize constructor
    */
-  public static init<M extends Model = Model>(this: ModelCtor<M>, attributes: ModelAttributes, options: InitOptions<M>): void;
+  public static init<M extends Model = Model>(this: ModelCtor<M>, attributes: ModelAttributes<M>, options: InitOptions<M>): void;
 
   /**
    * Remove attribute from model definition
@@ -2158,7 +2161,7 @@ export abstract class Model<T = any, T2 = any> extends Hooks {
   ): void;
   public static beforeDestroy<M extends Model>(
     this: { new (): M } & typeof Model,
-    fn: (instance: Model, options: InstanceDestroyOptions) => HookReturn
+    fn: (instance: M, options: InstanceDestroyOptions) => HookReturn
   ): void;
 
   /**
@@ -2725,6 +2728,15 @@ export abstract class Model<T = any, T2 = any> extends Hooks {
    * values gotten from the DB, and apply all custom getters.
    */
   public toJSON(): object;
+
+  /**
+   * Helper method to determine if a instance is "soft deleted". This is
+   * particularly useful if the implementer renamed the deletedAt attribute to
+   * something different. This method requires paranoid to be enabled.
+   *
+   * Throws an error if paranoid is not enabled.
+   */
+  public isSoftDeleted(): boolean;
 }
 
 export type ModelType = typeof Model;
